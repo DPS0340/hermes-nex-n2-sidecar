@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>ai.hermes.nex-n2-sidecar</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/python3</string>
+    <string>/Users/lee/programming/hermes-nex-n2-sidecar/sidecar_proxy.py</string>
+    <string>--host</string><string>127.0.0.1</string>
+    <string>--port</string><string>8092</string>
+    <string>--upstream</string><string>http://127.0.0.1:8090/v1</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PYTHONUNBUFFERED</key><string>1</string>
+    <key>NEX_N2_DEFAULT_BUDGET</key><string>512</string>
+    <key>NEX_N2_DEEP_BUDGET</key><string>2048</string>
+    <key>NEX_N2_VISIBLE_OUTPUT_BUDGET</key><string>2048</string>
+    <key>NEX_N2_UPSTREAM_MAX_TOKENS</key><string>4096</string>
+    <key>NEX_N2_DEEP_CONCURRENCY</key><string>1</string>
+    <key>NEX_N2_REQUEST_TIMEOUT</key><string>900</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>WorkingDirectory</key><string>/Users/lee/programming/hermes-nex-n2-sidecar</string>
+  <key>StandardOutPath</key><string>/Users/lee/.local/log/hermes-nex-n2-sidecar/stdout.log</string>
+  <key>StandardErrorPath</key><string>/Users/lee/.local/log/hermes-nex-n2-sidecar/stderr.log</string>
+</dict>
+</plist>
