@@ -17,6 +17,11 @@ CONTROL_PROFILE_KEYS = ("nex_n2_profile", "hermes_nex_n2_profile")
 DEEP_SUFFIXES = (":deep", "#deep", "-deep")
 DEEP_HEADER = "x-nex-n2-profile"
 DEBUG_REWRITE_HEADER = "x-nex-n2-debug-rewrite"
+CONTEXT_USED_HEADER = "x-nex-n2-context-used-tokens"
+CONTEXT_WINDOW_HEADER = "x-nex-n2-context-window"
+HARD_TASK_SCORE_HEADER = "x-nex-n2-hard-task-score"
+CONTEXT_BODY_KEY = "nex_n2_context"
+CONTEXT_CLEANUP_KEYS = ("nex_n2_context",)
 
 
 @dataclass(frozen=True)
@@ -31,6 +36,8 @@ class SidecarConfig:
     deep_concurrency: int = 1
     request_timeout: float = 900.0
     allow_origin: str = ""
+    context_deep_ratio: float = 0.75
+    context_deep_score: int = 2
 
 
 class NexSidecarServer(ThreadingHTTPServer):
@@ -50,15 +57,32 @@ def _int(value: Any, default: int) -> int:
         return default
 
 
-def _is_deep_request(payload: dict[str, Any]) -> bool:
+def _is_deep_request(payload: dict[str, Any], cfg: SidecarConfig, headers: dict[str, str] | None = None) -> bool:
     for key in CONTROL_PROFILE_KEYS:
         if str(payload.get(key, "")).lower() in {"deep", "2048", "true"}:
             return True
     model = str(payload.get("model", ""))
     if any(model.endswith(suffix) for suffix in DEEP_SUFFIXES):
         return True
-    existing_budget = _int((payload.get("chat_template_kwargs") or {}).get("thinking_budget"), 0) if isinstance(payload.get("chat_template_kwargs"), dict) else 0
-    return existing_budget > 512
+    if isinstance(payload.get("chat_template_kwargs"), dict):
+        existing_budget = _int(payload["chat_template_kwargs"].get("thinking_budget"), 0)
+        if existing_budget > 512:
+            return True
+
+    # Context-aware trigger — only fires when Hermes sends metadata
+    h = headers or {}
+    ctx = payload.get(CONTEXT_BODY_KEY)
+    ctx_dict = ctx if isinstance(ctx, dict) else {}
+    ctx_used = _int(h.get(CONTEXT_USED_HEADER, ""), 0) or _int(ctx_dict.get("used_tokens", ""), 0)
+    ctx_window = _int(h.get(CONTEXT_WINDOW_HEADER, ""), 0) or _int(ctx_dict.get("context_window", ""), 0)
+    hts = _int(h.get(HARD_TASK_SCORE_HEADER, ""), 0) or _int(ctx_dict.get("hard_task_score", ""), 0)
+
+    if ctx_window > 0 and ctx_used > 0:
+        ratio = ctx_used / ctx_window
+        if ratio >= cfg.context_deep_ratio and hts >= cfg.context_deep_score:
+            LOG.info("context trigger deep: ratio=%.2f >= %.2f, score=%s >= %s", ratio, cfg.context_deep_ratio, hts, cfg.context_deep_score)
+            return True
+    return False
 
 
 def _normalize_model(model: Any) -> Any:
@@ -70,11 +94,13 @@ def _normalize_model(model: Any) -> Any:
     return model
 
 
-def prepare_chat_payload(payload: dict[str, Any], cfg: SidecarConfig) -> tuple[dict[str, Any], str]:
+def prepare_chat_payload(payload: dict[str, Any], cfg: SidecarConfig, headers: dict[str, str] | None = None) -> tuple[dict[str, Any], str]:
     """Apply Nex-N2 thinking policy before forwarding to vmlx."""
     rewritten: dict[str, Any] = dict(payload)
-    mode = "deep" if _is_deep_request(rewritten) else "default"
+    mode = "deep" if _is_deep_request(rewritten, cfg, headers) else "default"
     for key in CONTROL_PROFILE_KEYS:
+        rewritten.pop(key, None)
+    for key in CONTEXT_CLEANUP_KEYS:
         rewritten.pop(key, None)
     if "model" in rewritten:
         rewritten["model"] = _normalize_model(rewritten["model"])
@@ -185,7 +211,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
         if header_profile:
             payload = dict(payload)
             payload["nex_n2_profile"] = header_profile
-        rewritten, mode = prepare_chat_payload(payload, self.app.cfg)
+        rewritten, mode = prepare_chat_payload(payload, self.app.cfg, {k: v for k, v in self.headers.items()})
         if path == "/debug/rewrite" or str(self.headers.get(DEBUG_REWRITE_HEADER, "")).lower() in {"1", "true", "yes"}:
             safe = {k: v for k, v in rewritten.items() if k != "messages"}
             safe["message_count"] = len(rewritten.get("messages", [])) if isinstance(rewritten.get("messages"), list) else 0
@@ -221,6 +247,8 @@ def config_from_env() -> SidecarConfig:
         deep_concurrency=_int(os.getenv("NEX_N2_DEEP_CONCURRENCY"), SidecarConfig.deep_concurrency),
         request_timeout=float(os.getenv("NEX_N2_REQUEST_TIMEOUT", str(SidecarConfig.request_timeout))),
         allow_origin=os.getenv("NEX_N2_ALLOW_ORIGIN", ""),
+        context_deep_ratio=float(os.getenv("NEX_N2_CONTEXT_DEEP_RATIO", str(SidecarConfig.context_deep_ratio))),
+        context_deep_score=_int(os.getenv("NEX_N2_CONTEXT_DEEP_SCORE"), SidecarConfig.context_deep_score),
     )
 
 
@@ -246,7 +274,7 @@ def main() -> int:
     signal.signal(signal.SIGTERM, handle_signal)
     signal.signal(signal.SIGINT, handle_signal)
     LOG.info("listening on http://%s:%s/v1 -> %s", cfg.bind_host, cfg.bind_port, cfg.upstream_base_url)
-    LOG.info("policy default_budget=%s deep_budget=%s visible_output_budget=%s max_tokens_cap=%s deep_concurrency=%s", cfg.default_budget, cfg.deep_budget, cfg.visible_output_budget, cfg.upstream_max_tokens, cfg.deep_concurrency)
+    LOG.info("policy default_budget=%s deep_budget=%s visible_output_budget=%s max_tokens_cap=%s deep_concurrency=%s context_deep_ratio=%.2f context_deep_score=%s", cfg.default_budget, cfg.deep_budget, cfg.visible_output_budget, cfg.upstream_max_tokens, cfg.deep_concurrency, cfg.context_deep_ratio, cfg.context_deep_score)
     try:
         server.serve_forever()
     finally:

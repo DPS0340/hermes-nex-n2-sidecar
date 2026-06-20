@@ -58,6 +58,56 @@ class TestPayloadRewrite(unittest.TestCase):
         self.assertEqual(rewritten["chat_template_kwargs"]["thinking_budget"], 2048)
         self.assertEqual(rewritten["max_tokens"], 2560)
 
+    def test_context_body_triggers_deep_when_ratio_and_score_high(self) -> None:
+        cfg = SidecarConfig(default_budget=512, deep_budget=2048, visible_output_budget=2048, upstream_max_tokens=4096, context_deep_ratio=0.70, context_deep_score=2)
+        body = {"model": "m", "messages": [], "nex_n2_context": {"used_tokens": 50000, "context_window": 65536, "hard_task_score": 3}}
+
+        rewritten, mode = prepare_chat_payload(body, cfg)
+
+        self.assertEqual(mode, "deep")
+        self.assertEqual(rewritten["chat_template_kwargs"]["thinking_budget"], 2048)
+        self.assertNotIn("nex_n2_context", rewritten)
+
+    def test_context_body_does_not_trigger_deep_when_ratio_low(self) -> None:
+        cfg = SidecarConfig(default_budget=512, deep_budget=2048, visible_output_budget=2048, upstream_max_tokens=4096, context_deep_ratio=0.70, context_deep_score=2)
+        body = {"model": "m", "messages": [], "nex_n2_context": {"used_tokens": 10000, "context_window": 65536, "hard_task_score": 3}}
+
+        rewritten, mode = prepare_chat_payload(body, cfg)
+
+        self.assertEqual(mode, "default")
+        self.assertEqual(rewritten["chat_template_kwargs"]["thinking_budget"], 512)
+        self.assertNotIn("nex_n2_context", rewritten)
+
+    def test_context_body_does_not_trigger_deep_when_score_low(self) -> None:
+        cfg = SidecarConfig(default_budget=512, deep_budget=2048, visible_output_budget=2048, upstream_max_tokens=4096, context_deep_ratio=0.70, context_deep_score=2)
+        body = {"model": "m", "messages": [], "nex_n2_context": {"used_tokens": 50000, "context_window": 65536, "hard_task_score": 0}}
+
+        rewritten, mode = prepare_chat_payload(body, cfg)
+
+        self.assertEqual(mode, "default")
+        self.assertEqual(rewritten["chat_template_kwargs"]["thinking_budget"], 512)
+        self.assertNotIn("nex_n2_context", rewritten)
+
+    def test_context_headers_trigger_deep(self) -> None:
+        cfg = SidecarConfig(default_budget=512, deep_budget=2048, visible_output_budget=2048, upstream_max_tokens=4096, context_deep_ratio=0.70, context_deep_score=2)
+        body = {"model": "m", "messages": []}
+        headers = {"x-nex-n2-context-used-tokens": "50000", "x-nex-n2-context-window": "65536", "x-nex-n2-hard-task-score": "3"}
+
+        rewritten, mode = prepare_chat_payload(body, cfg, headers)
+
+        self.assertEqual(mode, "deep")
+        self.assertEqual(rewritten["chat_template_kwargs"]["thinking_budget"], 2048)
+
+    def test_context_null_body_does_not_crash(self) -> None:
+        cfg = SidecarConfig(default_budget=512, deep_budget=2048, visible_output_budget=2048, upstream_max_tokens=4096)
+        body = {"model": "m", "messages": [], "nex_n2_context": None}
+
+        rewritten, mode = prepare_chat_payload(body, cfg)
+
+        self.assertEqual(mode, "default")
+        self.assertEqual(rewritten["chat_template_kwargs"]["thinking_budget"], 512)
+        self.assertNotIn("nex_n2_context", rewritten)
+
 
 class RecordingUpstream(BaseHTTPRequestHandler):
     requests_seen: list[dict] = []

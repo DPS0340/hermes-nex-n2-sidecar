@@ -21,6 +21,7 @@ Any of these trigger deep profile:
 - JSON control field: `"nex_n2_profile": "deep"` (stripped before upstream)
 - HTTP header: `X-Nex-N2-Profile: deep`
 - incoming `chat_template_kwargs.thinking_budget > 512`
+- **Context-aware** (body or headers): `context_used_tokens / context_window >= context_deep_ratio` AND `hard_task_score >= context_deep_score` — only when Hermes sends metadata; never auto-triggers from conversation length alone
 
 ## Run foreground
 
@@ -46,6 +47,8 @@ NEX_N2_VISIBLE_OUTPUT_BUDGET=2048
 NEX_N2_UPSTREAM_MAX_TOKENS=4096
 NEX_N2_DEEP_CONCURRENCY=1
 NEX_N2_REQUEST_TIMEOUT=900
+NEX_N2_CONTEXT_DEEP_RATIO=0.75
+NEX_N2_CONTEXT_DEEP_SCORE=2
 ```
 
 ## launchd
